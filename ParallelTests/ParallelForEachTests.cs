@@ -36,21 +36,14 @@ namespace ParallelTests
                 var lockobject = new object();
                 Parallel.ForEach(
                     Partitioner.Create(ns, EnumerablePartitionerOptions.NoBuffering),
-                    () =>
-                    {
-                        //Console.WriteLine("localInit");
-                        return new List<IEnumerable<int>>();
-                    },
+                    () => new List<IEnumerable<int>>(),
                     (n, _, local) =>
                     {
-                        //Console.WriteLine("body - n: {0}", n);
                         local.Add(DoWork(n));
                         return local;
                     },
                     local =>
                     {
-                        //Console.WriteLine("localFinally");
-                        Console.WriteLine("local.Count: {0}", local.Count);
                         lock (lockobject) parallelResults.Add(local);
                     });
                 var results = ConcatAll(parallelResults);
@@ -85,7 +78,9 @@ namespace ParallelTests
 
             foreach (var x in Enumerable.Range(1, n))
             {
-                Thread.Sleep(10);
+                // This waits for about 0.5 seconds on my machine.
+                Thread.SpinWait(2200000);
+
                 yield return x;
             }
         }
