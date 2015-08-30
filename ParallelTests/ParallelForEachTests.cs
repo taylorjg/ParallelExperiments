@@ -10,7 +10,7 @@ using NUnit.Framework;
 namespace ParallelTests
 {
     [TestFixture]
-    public class ParallelForEachTests
+    public class OneLevelDeepParallelTests
     {
         private const int NumIters = 8;
 
