@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Akka.Actor;
+using Akka.Util.Internal;
 using NUnit.Framework;
 
 namespace ParallelTests
@@ -68,6 +70,66 @@ namespace ParallelTests
                     .SelectMany(DoWork)
                     .Sum();
 
+                Assert.That(sum, Is.EqualTo(Enumerable.Range(1, 50).Sum() * NumIters));
+            });
+        }
+
+        private class MasterActor : ReceiveActor
+        {
+            private readonly List<IList<int>> _results = new List<IList<int>>();
+            private int _numIters;
+            private IActorRef _requester;
+
+            public MasterActor()
+            {
+                Receive<int>(numIters =>
+                {
+                    _results.Clear();
+                    _numIters = numIters;
+                    _requester = Sender;
+                    var ns = Enumerable.Repeat(50, numIters);
+                    ns.ForEach(n =>
+                    {
+                        var worker = Context.ActorOf(Props.Create(typeof(WorkerActor)));
+                        worker.Tell(n);
+                    });
+                });
+
+                Receive<IList<int>>(xs =>
+                {
+                    _results.Add(xs);
+                    if (_results.Count == _numIters)
+                    {
+                        var sum = ConcatAll(_results).Sum();
+                        _requester.Tell(sum);
+                        Context.Stop(Self);
+                    }
+                });
+            }
+        }
+
+        private class WorkerActor : ReceiveActor
+        {
+            public WorkerActor()
+            {
+                Receive<int>(n =>
+                {
+                    Console.WriteLine($"WorkerActor {Self.Path}");
+                    var xs = DoWork(n);
+                    Sender.Tell(xs.ToList());
+                });
+            }
+        }
+
+        [Test]
+        public void UsingAkkaActors()
+        {
+            TimeIt(() =>
+            {
+                var system = ActorSystem.Create("ParallelTest");
+                var master = system.ActorOf(Props.Create(typeof (MasterActor)));
+                var result = master.Ask(NumIters).Result;
+                var sum = (int) result;
                 Assert.That(sum, Is.EqualTo(Enumerable.Range(1, 50).Sum() * NumIters));
             });
         }
