@@ -13,7 +13,7 @@ namespace ParallelTests
     [TestFixture]
     public class OneLevelDeepParallelTests
     {
-        private const int NumIters = 50;
+        private const int NumIters = 25;
 
         private static IEnumerable<int> DoWork(int n)
         {
@@ -95,10 +95,11 @@ namespace ParallelTests
             Utils.TimeIt(() =>
             {
                 var system = ActorSystem.Create("ParallelTest");
-                var master = system.ActorOf(Props.Create(typeof (ParallelMaster)));
-                var result = master.Ask(NumIters).Result;
+                var parallelMaster = system.ActorOf(Props.Create(typeof (ParallelMaster)), "ParallelMaster");
+                var result = parallelMaster.Ask(NumIters).Result;
                 var sum = (int) result;
                 Assert.That(sum, Is.EqualTo(Enumerable.Range(1, 50).Sum() * NumIters));
+                system.Shutdown();
             });
         }
 
@@ -112,13 +113,13 @@ namespace ParallelTests
             {
                 Receive<int>(numIters =>
                 {
-                    _results.Clear();
                     _numIters = numIters;
                     _requester = Sender;
                     var ns = Enumerable.Repeat(50, numIters);
                     ns.ForEach(n =>
                     {
-                        var worker = Context.ActorOf(Props.Create(typeof(Worker)));
+                        var name = Context.GetChildren().Count() + 1;
+                        var worker = Context.ActorOf(Props.Create(typeof(Worker)), $"Worker{name}");
                         worker.Tell(n);
                     });
                 });
@@ -144,6 +145,7 @@ namespace ParallelTests
                 {
                     var xs = DoWork(n);
                     Sender.Tell(xs.ToList());
+                    Context.Stop(Self);
                 });
             }
         }
