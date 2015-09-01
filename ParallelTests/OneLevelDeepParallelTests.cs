@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,12 +13,28 @@ namespace ParallelTests
     [TestFixture]
     public class OneLevelDeepParallelTests
     {
-        private const int NumIters = 8;
+        private const int NumIters = 50;
+
+        private static IEnumerable<int> DoWork(int n)
+        {
+            Console.WriteLine(
+                "Task.CurrentId: {0}; Thread.CurrentThread.ManagedThreadId: {1}",
+                Task.CurrentId.HasValue ? Convert.ToString(Task.CurrentId.Value) : "N/A",
+                Thread.CurrentThread.ManagedThreadId);
+
+            foreach (var x in Enumerable.Range(1, n))
+            {
+                // This waits for about 0.5 seconds on my machine.
+                Thread.SpinWait(2200000);
+
+                yield return x;
+            }
+        }
 
         [Test]
         public void Benchmark()
         {
-            TimeIt(() =>
+            Utils.TimeIt(() =>
             {
                 var ns = Enumerable.Repeat(50, NumIters);
                 var flattenedResults = ns.SelectMany(DoWork);
@@ -29,9 +44,9 @@ namespace ParallelTests
         }
 
         [Test]
-        public void ForEach()
+        public void UsingParallelForEach()
         {
-            TimeIt(() =>
+            Utils.TimeIt(() =>
             {
                 var ns = Enumerable.Repeat(50, NumIters);
                 var parallelResults = new List<List<IEnumerable<int>>>();
@@ -48,17 +63,17 @@ namespace ParallelTests
                     {
                         lock (lockobject) parallelResults.Add(local);
                     });
-                var results = ConcatAll(parallelResults);
-                var flattenedResults = ConcatAll(results);
+                var results = Utils.ConcatAll(parallelResults);
+                var flattenedResults = Utils.ConcatAll(results);
                 var sum = flattenedResults.Sum();
                 Assert.That(sum, Is.EqualTo(Enumerable.Range(1, 50).Sum() * NumIters));
             });
         }
 
         [Test]
-        public void AsParallel()
+        public void UsingAsParallel()
         {
-            TimeIt(() =>
+            Utils.TimeIt(() =>
             {
                 var ns = Enumerable.Repeat(50, NumIters);
 
@@ -74,13 +89,26 @@ namespace ParallelTests
             });
         }
 
-        private class MasterActor : ReceiveActor
+        [Test]
+        public void UsingAkkaActors()
+        {
+            Utils.TimeIt(() =>
+            {
+                var system = ActorSystem.Create("ParallelTest");
+                var master = system.ActorOf(Props.Create(typeof (ParallelMaster)));
+                var result = master.Ask(NumIters).Result;
+                var sum = (int) result;
+                Assert.That(sum, Is.EqualTo(Enumerable.Range(1, 50).Sum() * NumIters));
+            });
+        }
+
+        private class ParallelMaster : ReceiveActor
         {
             private readonly List<IList<int>> _results = new List<IList<int>>();
             private int _numIters;
             private IActorRef _requester;
 
-            public MasterActor()
+            public ParallelMaster()
             {
                 Receive<int>(numIters =>
                 {
@@ -90,7 +118,7 @@ namespace ParallelTests
                     var ns = Enumerable.Repeat(50, numIters);
                     ns.ForEach(n =>
                     {
-                        var worker = Context.ActorOf(Props.Create(typeof(WorkerActor)));
+                        var worker = Context.ActorOf(Props.Create(typeof(Worker)));
                         worker.Tell(n);
                     });
                 });
@@ -100,7 +128,7 @@ namespace ParallelTests
                     _results.Add(xs);
                     if (_results.Count == _numIters)
                     {
-                        var sum = ConcatAll(_results).Sum();
+                        var sum = Utils.ConcatAll(_results).Sum();
                         _requester.Tell(sum);
                         Context.Stop(Self);
                     }
@@ -108,66 +136,16 @@ namespace ParallelTests
             }
         }
 
-        private class WorkerActor : ReceiveActor
+        private class Worker : ReceiveActor
         {
-            public WorkerActor()
+            public Worker()
             {
                 Receive<int>(n =>
                 {
-                    Console.WriteLine($"WorkerActor {Self.Path}");
                     var xs = DoWork(n);
                     Sender.Tell(xs.ToList());
                 });
             }
-        }
-
-        [Test]
-        public void UsingAkkaActors()
-        {
-            TimeIt(() =>
-            {
-                var system = ActorSystem.Create("ParallelTest");
-                var master = system.ActorOf(Props.Create(typeof (MasterActor)));
-                var result = master.Ask(NumIters).Result;
-                var sum = (int) result;
-                Assert.That(sum, Is.EqualTo(Enumerable.Range(1, 50).Sum() * NumIters));
-            });
-        }
-
-        private static IEnumerable<int> DoWork(int n)
-        {
-            Console.WriteLine("Task.CurrentId: {0}; Thread.CurrentThread.ManagedThreadId: {1}", Task.CurrentId, Thread.CurrentThread.ManagedThreadId);
-
-            foreach (var x in Enumerable.Range(1, n))
-            {
-                // This waits for about 0.5 seconds on my machine.
-                Thread.SpinWait(2200000);
-
-                yield return x;
-            }
-        }
-
-        private static void TimeIt(Action action)
-        {
-            var stopwatch = Stopwatch.StartNew();
-
-            try
-            {
-                action();
-            }
-            finally
-            {
-                stopwatch.Stop();
-                Console.WriteLine("stopwatch.Elapsed: {0}", stopwatch.Elapsed);
-            }
-        }
-
-        private static IEnumerable<T> ConcatAll<T>(IEnumerable<IEnumerable<T>> sources)
-        {
-            foreach (var source in sources)
-                using (var e = source.GetEnumerator())
-                    while (e.MoveNext())
-                        yield return e.Current;
         }
     }
 }
